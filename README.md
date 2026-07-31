@@ -1,225 +1,76 @@
-# 📚 DeKindled - Chrome Extension for Base64 Blob Extraction
+# 📚 DeKindled (Images fork) — download Kindle Cloud Reader pages as a ZIP
 
-A Chrome extension designed to build epubs from Amazon's Kindle Reader website.
+A Chrome extension that captures the page images Amazon's **Kindle Cloud Reader** renders and saves them to a single **ZIP of image files** — one file per page.
 
-It injects into the Kindle Reader website to capture and extract base64 blob content, before the blobs get revoked.
+> **This is a fork.** The [original DeKindled](https://github.com/dmilin1/inkwell/) captured pages and sent them to the **OpenAI vision API** to rebuild an **EPUB** (markdown → HTML → EPUB). **This fork removes OpenAI and EPUB entirely** and just downloads the raw captured page images. No API key, no network calls to third parties, no conversion — you get a folder of `page-0001.jpg`, `page-0002.jpg`, … inside a ZIP named after the book.
 
-Inspired by my desire to read the books I've purchased through [Inkwell](https://github.com/dmilin1/inkwell/), an ebook reader app I built for myself.
+## What changed vs. upstream
 
-Thanks to [Showdown](https://github.com/showdownjs/showdown) for their markdown to HTML converter.
+| | Upstream DeKindled | This fork |
+|---|---|---|
+| Output | EPUB (rebuilt from AI transcription) | **ZIP of page images** |
+| OpenAI API key | Required | **Not used / removed** |
+| Network calls | Sends every page to OpenAI | **None** — everything stays local |
+| Capture start | Auto-scans on demand | **Nothing is captured until you click "Start Capture"** |
+| UI | Full-screen overlay | **Non-blocking banner** with Start / Stop / Download |
+| Amazon domains | `read.amazon.com` only | **All regional domains** (`.co.uk`, `.de`, `.co.jp`, `.fr`, `.ca`, …) |
+| Removed | — | `showdown.min.js`, OpenAI options page, EPUB builder |
 
-# DeKindled Quick Start Guide
+If you want AI transcription to EPUB, use the original. If you just want the page images, use this fork.
 
-## 🚀 Getting Started with DeKindled
+## 🐞 Bugs fixed from the original
 
-### 1. Install DeKindled
-- Open Chrome and go to `chrome://extensions/`
-- Enable "Developer mode" (top right)
-- Click "Load unpacked" and select the DeKindled folder
-- You should see the DeKindled extension installed
+Beyond the feature changes, this fork fixes two things that stopped the upstream extension from working properly for me:
 
-### 2. Open Your Kindle Book
-- Go to [read.amazon.com](https://read.amazon.com)
-- Sign in and open a book
-- Look for the "📚 DeKindled Active" indicator (bottom-right corner)
+- **It only worked on `read.amazon.com`.** The upstream manifest matched only the US domain in its content-script `matches`, `host_permissions`, and `web_accessible_resources`. On any regional store — `read.amazon.co.uk`, `.de`, `.co.jp`, `.fr`, `.ca`, `.com.au`, and the rest — the interceptor was never injected, so nothing was captured and the extension silently appeared to do nothing. This fork registers **all 13 regional `read.amazon.*` domains**.
 
-### 3. Capture Content
-- If the book didn't open on the first page, go to it, then reload the page.
-- Click the extension icon to open the overlay.
-- Click "Start Auto-Scan" and DeKindled will click through the book, capturing content as it goes.
-- When the page counter at the bottom stops increasing, the scan is complete.
+- **Pages came out incomplete or out of order.** The reader generates a page's image **only the first time that page renders**, and won't regenerate it when you revisit an already-cached page. The upstream auto-scan started capturing from wherever you happened to be, so earlier pages were often missing and the ordering could drift. This fork keeps capture **disarmed until you click Start**, has you position on the first page, then **reloads to force a clean forward render from page one** — so you get every page, in order. (See ["Why it reloads"](#why-it-reloads-and-starts-from-where-you-are) below.)
 
-### 4. Convert to EPUB
-- Click "Convert to EPUB" in the top right corner of the overlay
-- You'll be asked for the book title and author, then your OpenAI API key
-- Background processing will begin converting the images to Markdown which will then be converted to EPUB
-- Once completed, a download prompt will appear
+## 🚀 Install
 
-## ⚠️ Important Notes
+1. Download the release ZIP (or `git clone` this repo) and unzip it.
+2. Open Chrome and go to `chrome://extensions/`.
+3. Enable **Developer mode** (top-right).
+4. Click **Load unpacked** and select the `dekindled` folder.
 
-- DeKindled captures content as it's loaded by the Kindle reader. If you go backwards or change display settings, your content will be out of order!
+## 📖 How to capture a book
 
-## ⚙️ Advanced Configuration
+1. Go to your regional reader — [read.amazon.com](https://read.amazon.com), [read.amazon.co.uk](https://read.amazon.co.uk), etc. — sign in, and open a book.
+2. **Turn to the first page you want** using the reader's own controls. Nothing is captured yet.
+3. Click the **DeKindled toolbar icon**. A small banner appears at the top of the page.
+4. Click **▶ Start Capture**. The page reloads and DeKindled begins turning pages forward on its own, capturing each one. A live count and a **■ Stop** button show in the banner.
+5. Let it run to the end of the book, or click **■ Stop** any time to keep only what's captured so far.
+6. Click the toolbar icon again and press **⬇ Download Images** to save the ZIP. Use **Clear** to discard the capture and start over.
 
-### 🎛️ Customizing the Analysis Prompt
+### Why it reloads and starts from where you are
 
-DeKindled uses OpenAI's vision API to convert scanned book pages to markdown. You can customize the prompt that controls how the AI interprets and converts the content.
+The reader only generates a page's image **the first time that page renders**, and won't regenerate it when you revisit a cached page. Reloading forces a fresh render of your current page onward while the capture is armed — which is why you position yourself on the first page **before** starting, rather than letting the extension seek backwards.
 
-#### **Accessing Options:**
-1. **Right-click** the DeKindled extension icon in Chrome
-2. Select **"Options"** from the context menu
-3. Or go to `chrome://extensions/` → DeKindled → **"Extension options"**
+## ⚠️ Notes
 
-#### **Modifying the Analysis Prompt:**
-1. In the options page, scroll to the **"Analysis Prompt"** section
-2. The large text area contains the prompt sent to OpenAI for each page
-3. **Edit the prompt** to customize how the AI processes book pages:
-   - Change instructions for formatting (e.g., preserve indentation differently)
-   - Modify chapter detection logic
-   - Add specific instructions for handling tables, quotes, or special formatting
-   - Adjust the tone or style of conversion
+- Capture is **forward-only** and relies on the page images the reader loads. Don't switch display settings or navigate manually mid-capture or pages may land out of order — use **Clear** and restart if that happens.
+- Keep the tab focused and in the foreground while it scans.
+- This is for **your own purchased books**, so you can read them on any device or app you choose. Buy your books and support the authors.
 
-#### **Default Prompt Behavior:**
-The default prompt instructs the AI to:
-- Convert images to clean markdown
-- Detect chapter titles and mark them with `--- NEW CHAPTER: [Title] ---`
-- Handle paragraph indentation by adding line breaks
-- Preserve all visible text content
-- Use proper markdown formatting
+## 🛠️ How it works
 
-#### **Resetting the Prompt:**
-- Click **"Reset to Default"** to restore the original prompt
-- Confirm the action to replace your custom prompt
-- Changes are automatically saved
+- **`inject.js`** (content script, `document_start`) injects the interceptor into the page's main world and bridges messages to the background worker.
+- **`interceptor.js`** overrides `URL.createObjectURL()` and reads each page blob to base64 *before the reader revokes it* — but only while capture is armed. After a "Start Capture" reload it auto-drives the reader forward (synthetic arrow-key navigation) to the end, showing a Stop button.
+- **`viewer-inject.js`** is the non-blocking control banner (Start / Stop / Download / Clear).
+- **`background.js`** collects the captured pages in chunks and bundles them into a ZIP via `zip-utils.js`, then triggers the download. No external services.
 
-#### **Tips for Custom Prompts:**
-- **Test incrementally**: Make small changes and test with a few pages
-- **Keep the chapter marker**: The `--- NEW CHAPTER: [Title] ---` format is required for proper EPUB structure
-- **Preserve key instructions**: Don't remove the core instruction to convert everything to markdown
-- **Be specific**: Clear, detailed instructions work better than vague ones
-- **Consider your content**: Tailor the prompt to the types of books you typically convert
+### File structure
+- `manifest.json` — extension configuration
+- `background.js` — service worker; builds and downloads the ZIP
+- `inject.js` — content-script injector + message bridge
+- `interceptor.js` — blob interception + auto page-turning capture driver
+- `viewer-inject.js` — non-blocking control banner
+- `zip-utils.js` — minimal ZIP writer
 
-> **⚠️ Advanced Feature**: Modifying the prompt requires understanding of how AI language models work. Incorrect prompts may result in poor conversion quality or failed processing.
+## 🙏 Credits
 
-# DeKindled Technical Details
-
-## 🎯 Problem Solved
-
-Web readers often generate blob URLs for content (like images, text) that get revoked immediately after creation. This extension:
-- **Captures blob data instantly** when `URL.createObjectURL()` is called
-- **Stores base64 content** before blobs get revoked
-- **Provides easy download** of captured content
-
-## ✨ Key Features
-
-### 🚀 Real-time Base64 Capture
-- Intercepts `URL.createObjectURL()` calls
-- Immediately reads and stores blob content as base64
-- Visual indicators show capture success/failure
-- Works before blob URLs get revoked
-
-### 💾 Persistent Storage
-- Stores base64 data in memory during session
-- Maps blob URLs to their base64 content
-- Survives blob URL revocation
-- Debug info shows storage status
-
-### 🎨 User-friendly Interface
-- Overlay viewer accessible via extension icon
-- Real-time stats (captured, stored, total size)
-- Storage status indicators
-
-## 🛠️ How It Works
-
-### 1. **Blob Interception**
-```javascript
-// When any page creates a blob URL:
-URL.createObjectURL = function(blob) {
-    const url = originalCreateObjectURL(blob);
-    
-    // Immediately read and store base64 data
-    readBlobAsBase64(blob).then(base64Data => {
-        window.__dekindled.blobData.set(url, {
-            base64: base64Data,
-            type: blob.type,
-            size: blob.size
-        });
-    });
-    
-    return url;
-}
-```
-
-### 2. **Base64 Storage**
-- Uses `FileReader.readAsDataURL()` to convert blobs to base64
-- Stores in a `Map` with blob URL as key
-- Maintains metadata (type, size, timestamp)
-- Survives blob revocation
-
-### 3. **Smart Downloads**
-- Downloads from stored base64 data when available
-- Falls back to URL access if storage failed
-- Batch processing for multiple files
-- Proper file extensions based on MIME types
-
-## 📦 Installation
-
-1. **Clone this repository:**
-   ```bash
-   git clone https://github.com/yourusername/dekindled.git
-   cd dekindled
-   ```
-
-2. **Load the extension in Chrome:**
-   - Open `chrome://extensions/`
-   - Enable "Developer mode"
-   - Click "Load unpacked"
-   - Select the `dekindled` folder
-
-3. **Grant permissions:**
-   - The extension needs access to the Kindle Reader website to intercept blob creation
-   - Downloads permission for saving captured content
-
-### Files Structure
-- `manifest.json` - Extension configuration
-- `background.js` - Service worker for extension management
-- `inject.js` - Content script injector
-- `interceptor.js` - **Core blob interception and base64 storage**
-- `viewer-inject.js` - **Overlay UI for managing captured content**
-
-### Key Functions
-```javascript
-// Store base64 data immediately
-window.__dekindled.blobData.set(url, {
-    base64: dataURL,
-    type: blob.type,
-    size: blob.size
-});
-
-// Download from stored base64
-window.__dekindled.downloadStoredBlob(url, filename);
-
-// Download all stored content
-window.__dekindled.downloadAllStored();
-```
-
-## 🧪 Testing
-
-Use the included `test-page.html` to verify functionality:
-```bash
-# Open test-page.html in Chrome with extension loaded
-# Should capture test blobs and show visual indicators
-```
-
-## 📈 Troubleshooting
-
-### No Blobs Captured
-- Ensure extension is active (blue indicator in bottom-right)
-- Check browser console for DeKindled messages
-- Try refreshing the page after enabling extension
-
-### Storage Shows "Missing"
-- Blob was created but base64 reading failed
-- Check console for FileReader errors
-- May indicate binary/unsupported blob type
-
-### Downloads Fail
-- Try "Try URL" button for recently created blobs
-- Check if blob URL is still valid
-- Verify download permissions are granted
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open Pull Request
+Fork of [DeKindled](https://github.com/dmilin1/inkwell/) by dmilin1. This fork strips the OpenAI/EPUB pipeline down to a local image export.
 
 ## 📄 License
 
-This project is licensed under the MIT License
-
----
-
-**Note**: This extension is designed for legitimate content preservation and so you can read your content on any device or app you choose. Buy your books and support the authors!
+MIT. See `LICENSE`.

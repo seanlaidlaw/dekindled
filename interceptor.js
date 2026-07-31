@@ -1,20 +1,36 @@
 // DeKindled - Blob URL Interceptor
 // Captures blob URLs and their base64 content for extraction
 (function() {
+    // --- Logging helpers (toggle with DK_DEBUG) ---
+    const DK_DEBUG = false;
+    const _tag = '[DeKindled][interceptor]';
+    const dklog  = (...a) => { if (DK_DEBUG) console.log(_tag, ...a); };
+    const dkwarn = (...a) => console.warn(_tag, ...a);
+    const dkerr  = (...a) => console.error(_tag, ...a);
+
+    const _frame = (window.top === window) ? 'TOP frame' : 'IFRAME';
+    dklog(`script running in ${_frame}:`, location.href, '| readyState:', document.readyState);
+
     // Guard against multiple script injection
     if (window.__dekindled && window.__dekindled._initialized) {
-        console.log('[DeKindled] Interceptor already initialized, skipping duplicate injection');
+        dklog('interceptor already initialized, skipping duplicate injection');
         return;
     }
-    
+
     // Create storage for blob data
     window.__dekindled = window.__dekindled || {
         blobs: [],
         blobData: new Map(), // Store actual blob content
-        _initialized: true // Mark as initialized
+        _initialized: true, // Mark as initialized
+        // Nothing is stored until capture is explicitly armed (by clicking the
+        // extension and starting a capture). Page turns still increment
+        // stats.createCalls so the scanner can detect book boundaries even
+        // while disarmed.
+        capturing: false,
+        stats: { createCalls: 0, blobCaptured: 0, nonBlob: 0, readErrors: 0, revoked: 0, skipped: 0 }
     };
-    
-    console.log('[DeKindled] Initializing blob interceptor...');
+
+    dklog('initializing blob interceptor...');
     
     // Logging function
     function logBlob(type, details) {
@@ -25,8 +41,9 @@
             timestamp: new Date().toISOString() 
         });
         
-        // Visual indicator for blob creation
-        if (type === 'Blob URL Created') {
+        // Visual indicator for blob creation — only while capture is armed,
+        // so nothing flashes on screen during normal reading.
+        if (type === 'Blob URL Created' && window.__dekindled && window.__dekindled.capturing) {
             [...document.getElementsByClassName('dekindled-indicator')].forEach(indicator => indicator.remove());
             const indicator = document.createElement('div');
             indicator.className = 'dekindled-indicator';
@@ -49,30 +66,41 @@
     
     // Check if URL.createObjectURL is already overridden
     if (URL.createObjectURL._dekindledOverridden) {
-        console.log('[DeKindled] URL.createObjectURL already overridden, skipping');
+        dklog('URL.createObjectURL already overridden, skipping');
         return;
     }
-    
+
     // Store original functions
     const originalCreateObjectURL = URL.createObjectURL;
     const originalRevokeObjectURL = URL.revokeObjectURL;
-    
+
     // Override createObjectURL
     URL.createObjectURL = function(object) {
         const url = originalCreateObjectURL.apply(this, arguments);
-        
+        window.__dekindled.stats.createCalls++;
+
         try {
+            const objectType = object?.constructor?.name || 'Unknown';
+            const isBlob = object instanceof Blob;
             const details = {
                 url: url,
-                objectType: object?.constructor?.name || 'Unknown',
+                objectType: objectType,
                 size: object?.size || 0,
                 type: object?.type || 'Unknown',
                 timestamp: new Date().toISOString(),
                 stored: false
             };
-            
-            // If it's a Blob, immediately read its content as base64
-            if (object instanceof Blob) {
+
+            dklog(`createObjectURL #${window.__dekindled.stats.createCalls}`, {
+                objectType, isBlob, mime: details.type, size: details.size
+            });
+
+            // Only STORE blobs while capture is armed. When disarmed we do
+            // nothing but count, so merely opening/reading a book captures nothing.
+            if (isBlob && !window.__dekindled.capturing) {
+                window.__dekindled.stats.skipped++;
+                // (quiet — this fires a lot during normal reading)
+            } else if (isBlob) {
                 readBlobAsBase64(object).then(base64Data => {
                     // Store the base64 data
                     window.__dekindled.blobData.set(url, {
@@ -81,14 +109,15 @@
                         size: object.size,
                         timestamp: details.timestamp
                     });
-                    
+
                     details.stored = true;
-                    console.log(`[DeKindled] Captured base64 data for ${url}:`, {
+                    window.__dekindled.stats.blobCaptured++;
+                    dklog(`captured blob #${window.__dekindled.stats.blobCaptured} (total stored: ${window.__dekindled.blobData.size})`, {
                         type: object.type,
                         size: object.size,
                         dataLength: base64Data.length
                     });
-                    
+
                     // Update the visual indicator
                     const indicators = document.querySelectorAll('div[style*="DeKindled: Captured"]');
                     const latestIndicator = indicators[indicators.length - 1];
@@ -97,13 +126,19 @@
                         latestIndicator.style.background = '#2e7d32';
                     }
                 }).catch(error => {
-                    console.error('[DeKindled] Failed to read blob as base64:', error);
+                    window.__dekindled.stats.readErrors++;
+                    dkerr('failed to read blob as base64:', error);
                 });
+            } else {
+                // Kindle may render pages via MediaSource / canvas rather than image Blobs.
+                // These are NOT captured — logging them tells us if that's why nothing shows up.
+                window.__dekindled.stats.nonBlob++;
+                dkwarn(`createObjectURL for NON-Blob object "${objectType}" — not captured (nonBlob count: ${window.__dekindled.stats.nonBlob})`);
             }
-            
+
             logBlob('Blob URL Created', details);
         } catch (e) {
-            console.error('[DeKindled] Error in createObjectURL override:', e);
+            dkerr('error in createObjectURL override:', e);
             // Fallback visual alert
             const alert = document.createElement('div');
             alert.style.cssText = 'position:fixed;top:50px;left:10px;background:orange;color:black;padding:10px;z-index:999999;border-radius:4px;';
@@ -120,14 +155,16 @@
     
     // Override revokeObjectURL
     URL.revokeObjectURL = function(url) {
+        const hadData = window.__dekindled.blobData.has(url);
+        window.__dekindled.stats.revoked++;
         logBlob('Blob URL Revoked', {
             url: url,
             timestamp: new Date().toISOString(),
-            hadData: window.__dekindled.blobData.has(url)
+            hadData: hadData
         });
-        
-        console.log(`[DeKindled] Blob URL revoked: ${url}, had stored data: ${window.__dekindled.blobData.has(url)}`);
-        
+
+        dklog(`revoked ${url} — had stored data: ${hadData} (we keep our copy)`);
+
         return originalRevokeObjectURL.apply(this, arguments);
     };
     
@@ -142,6 +179,141 @@
     statusDiv.style.cssText = 'position:fixed;bottom:10px;right:10px;background:#1976d2;color:white;padding:5px 10px;z-index:999999;font-size:10px;border-radius:4px;';
     statusDiv.textContent = '📚 DeKindled Active';
     document.body.appendChild(statusDiv);
-    
-    console.log('[DeKindled] Content extraction ready - capturing base64 blob data');
-})(); 
+
+    dklog('content extraction ready — capturing base64 blob data');
+
+    // Expose a quick diagnostic helper you can call from the console:
+    //   window.__dekindled.debugDump()
+    window.__dekindled.debugDump = function() {
+        const s = window.__dekindled.stats;
+        console.log(`${_tag} DUMP`, {
+            frame: _frame,
+            url: location.href,
+            storedPages: window.__dekindled.blobData.size,
+            stats: s,
+            overrideInstalled: !!URL.createObjectURL._dekindledOverridden
+        });
+        return { storedPages: window.__dekindled.blobData.size, stats: s };
+    };
+
+    // Periodic heartbeat so we can see capture progress without manual polling
+    if (DK_DEBUG) {
+        setInterval(() => {
+            const s = window.__dekindled.stats;
+            dklog(`heartbeat — stored:${window.__dekindled.blobData.size} createCalls:${s.createCalls} blobs:${s.blobCaptured} nonBlob:${s.nonBlob} readErrors:${s.readErrors}`);
+        }, 5000);
+    }
+
+    // ---- Post-reload capture driver --------------------------------------
+    // The reader only creates a page's blob when it FIRST renders that page and
+    // does NOT recreate it on revisit. So the only reliable way to capture the
+    // whole book is: arm capture from page load (to catch the reader's initial
+    // preload), then step forward so the reader renders/preloads the rest.
+    //
+    // The overlay's "Capture Whole Book" button navigates to page 1, sets these
+    // sessionStorage flags, and reloads. After the reload we (the interceptor,
+    // which runs at document_start) pick the flags up here and do the work — the
+    // overlay doesn't survive the reload, but this does.
+    function armedFromStorage(key) {
+        try { return sessionStorage.getItem(key) === '1'; } catch (e) { return false; }
+    }
+    function clearStorage(key) {
+        try { sessionStorage.removeItem(key); } catch (e) {}
+    }
+
+    // Only the top frame has the reader UI / creates the page blobs.
+    if (window.top === window) {
+        if (armedFromStorage('dekindled_armed')) {
+            window.__dekindled.capturing = true;
+            dklog('resumed ARMED capture after reload (catching the reader preload from page load)');
+        }
+        if (armedFromStorage('dekindled_autoscan')) {
+            startCaptureDriver();
+        }
+    }
+
+    function startCaptureDriver() {
+        dklog('capture driver starting (forward capture from current page to end)');
+        const NEXT = ['.kr-chevron-container-right', '#kr-chevron-right',
+                      '[aria-label="Next page"]', '[aria-label="Next Page"]',
+                      '[class*="chevron-container-right"]'];
+        const firstEl = (sels) => { for (const s of sels) { const el = document.querySelector(s); if (el) return el; } return null; };
+        const fireKey = (t, key, kc) => {
+            const o = { key, code: key, keyCode: kc, which: kc, bubbles: true, cancelable: true };
+            t.dispatchEvent(new KeyboardEvent('keydown', o));
+            t.dispatchEvent(new KeyboardEvent('keyup', o));
+        };
+        const turn = () => {
+            const el = firstEl(NEXT);
+            [el, document, document.body].filter(Boolean).forEach(t => fireKey(t, 'ArrowRight', 39));
+            if (el) { try { el.click(); } catch (e) {} }
+        };
+        const pageNum = () => { let p = null; document.querySelectorAll('[class*="footer"],ion-footer,[class*="location"]').forEach(el => { const m = (el.textContent || '').match(/Page\s+(\S+)\s+of\s+(\d+)/i); if (m) p = m[1] + '/' + m[2]; }); return p; };
+        const scr = () => { const b = document.querySelector('#kr-scrubber-bar'); return b ? b.value : null; };
+        const scrFrac = () => { const b = document.querySelector('#kr-scrubber-bar'); if (!b || b.max == null) return null; const v = Number(b.value), m = Number(b.max); return m ? v / m : null; };
+        const isUnavailable = (el) => {
+            if (!el) return true;
+            if (el.disabled) return true;
+            try { const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden' || cs.pointerEvents === 'none') return true; } catch (e) {}
+            return false;
+        };
+        const atEnd = () => { const f = scrFrac(); if (f != null && f >= 0.995) return true; return isUnavailable(firstEl(NEXT)); };
+
+        const TICK = 800;
+        const STABLE_STOP = 14;   // ~11s of no progress => treat as end of book (fallback)
+        const MAX_TICKS = 10000;
+        const START_DELAY = 2500; // let the reader settle + do its initial preload
+
+        // ---- status panel with a live count + Stop button ----
+        const panel = document.createElement('div');
+        panel.className = 'dekindled-done-banner';
+        panel.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:#1976d2;color:#fff;padding:10px 14px;z-index:2147483647;border-radius:8px;font-family:-apple-system,sans-serif;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.3);display:flex;align-items:center;gap:12px;';
+        const txt = document.createElement('span');
+        txt.textContent = '📚 DeKindled: preparing to capture…';
+        const stopBtn = document.createElement('button');
+        stopBtn.textContent = '■ Stop';
+        stopBtn.style.cssText = 'background:#f44336;color:#fff;border:none;padding:6px 12px;border-radius:5px;cursor:pointer;font-size:13px;font-weight:600;';
+        panel.appendChild(txt);
+        panel.appendChild(stopBtn);
+        document.body.appendChild(panel);
+
+        let iv = null;
+        stopBtn.onclick = () => { if (iv) { clearInterval(iv); iv = null; } finish('stopped'); };
+
+        setTimeout(() => {
+            let tick = 0, stable = 0, lastSig = null;
+            iv = setInterval(() => {
+                try {
+                    tick++;
+                    if (tick > MAX_TICKS) { clearInterval(iv); iv = null; finish('safety cap'); return; }
+
+                    turn();
+
+                    const sig = (pageNum() || '?') + '|' + scr() + '|' + window.__dekindled.blobData.size;
+                    if (sig === lastSig) stable++; else stable = 0;
+                    lastSig = sig;
+
+                    const n = window.__dekindled.blobData.size;
+                    if (tick % 3 === 0) txt.textContent = `📚 DeKindled: capturing… ${n} pages`;
+                    if (tick % 5 === 0) dklog(`driver tick ${tick} sig=${sig} stable=${stable} stored=${n}`);
+
+                    if (atEnd() || stable >= STABLE_STOP) { clearInterval(iv); iv = null; finish(atEnd() ? 'reached end of book' : 'no more new pages'); }
+                } catch (e) {
+                    dkerr('driver tick error:', e);
+                }
+            }, TICK);
+        }, START_DELAY);
+
+        function finish(reason) {
+            if (iv) { clearInterval(iv); iv = null; }
+            window.__dekindled.capturing = false;
+            clearStorage('dekindled_armed');
+            clearStorage('dekindled_autoscan');
+            const n = window.__dekindled.blobData.size;
+            dklog(`driver finished (${reason}) — ${n} pages captured. Click the DeKindled icon to download.`);
+            if (stopBtn.parentNode) stopBtn.remove();
+            txt.textContent = `📚 DeKindled: captured ${n} pages — click the extension icon, then “Download Images”`;
+            panel.style.background = '#2e7d32';
+        }
+    }
+})();

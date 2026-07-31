@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "DeKindled",
-  "version": "1.0",
-  "description": "Extract and save blob content from web readers like Kindle",
+  "name": "DeKindled (Images)",
+  "version": "2.0.0",
+  "description": "Capture Kindle Cloud Reader pages and download them as a ZIP of images (no OpenAI, no EPUB)",
   "icons": {
     "16": "icon.png",
     "32": "icon.png",
@@ -18,7 +18,18 @@
   ],
   "host_permissions": [
     "https://read.amazon.com/*",
-    "https://api.openai.com/*"
+    "https://read.amazon.co.uk/*",
+    "https://read.amazon.co.jp/*",
+    "https://read.amazon.de/*",
+    "https://read.amazon.fr/*",
+    "https://read.amazon.es/*",
+    "https://read.amazon.it/*",
+    "https://read.amazon.nl/*",
+    "https://read.amazon.ca/*",
+    "https://read.amazon.com.au/*",
+    "https://read.amazon.com.br/*",
+    "https://read.amazon.com.mx/*",
+    "https://read.amazon.in/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -32,10 +43,23 @@
       "128": "icon.png"
     }
   },
-  "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": ["https://read.amazon.com/*"],
+      "matches": [
+        "https://read.amazon.com/*",
+        "https://read.amazon.co.uk/*",
+        "https://read.amazon.co.jp/*",
+        "https://read.amazon.de/*",
+        "https://read.amazon.fr/*",
+        "https://read.amazon.es/*",
+        "https://read.amazon.it/*",
+        "https://read.amazon.nl/*",
+        "https://read.amazon.ca/*",
+        "https://read.amazon.com.au/*",
+        "https://read.amazon.com.br/*",
+        "https://read.amazon.com.mx/*",
+        "https://read.amazon.in/*"
+      ],
       "js": ["inject.js"],
       "run_at": "document_start",
       "all_frames": true
@@ -44,7 +68,21 @@
   "web_accessible_resources": [
     {
       "resources": ["interceptor.js", "viewer-inject.js", "zip-utils.js"],
-      "matches": ["https://read.amazon.com/*"]
+      "matches": [
+        "https://read.amazon.com/*",
+        "https://read.amazon.co.uk/*",
+        "https://read.amazon.co.jp/*",
+        "https://read.amazon.de/*",
+        "https://read.amazon.fr/*",
+        "https://read.amazon.es/*",
+        "https://read.amazon.it/*",
+        "https://read.amazon.nl/*",
+        "https://read.amazon.ca/*",
+        "https://read.amazon.com.au/*",
+        "https://read.amazon.com.br/*",
+        "https://read.amazon.com.mx/*",
+        "https://read.amazon.in/*"
+      ]
     }
   ]
-} 
+}
