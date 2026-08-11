@@ -219,7 +219,10 @@ async function processImageDownload(conversion) {
       }
       const ext = extensionForType(page.type);
       const pageNumber = String(i + 1).padStart(padWidth, '0');
-      zip.file(`${folderName}/page-${pageNumber}.${ext}`, bytes);
+      // Stamp each entry with when its page was captured (blob-creation time),
+      // so extracted files sort by capture order instead of the 1979 default.
+      const mtime = page.timestamp ? new Date(page.timestamp) : undefined;
+      zip.file(`${folderName}/page-${pageNumber}.${ext}`, bytes, mtime);
       totalBytes += bytes.length;
       dklog(`added page ${i + 1}/${pages.length} -> page-${pageNumber}.${ext} (${bytes.length} bytes, mime=${page.type})`);
     }

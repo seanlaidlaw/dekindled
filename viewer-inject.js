@@ -149,7 +149,7 @@
             render('📤 Preparing download…');
 
             const pagesData = Array.from(dk.blobData.entries()).map(([url, d], i) => ({
-                index: i + 1, base64: d.base64, type: d.type, size: d.size
+                index: i + 1, base64: d.base64, type: d.type, size: d.size, timestamp: d.timestamp
             }));
 
             const CHUNK = 5;
