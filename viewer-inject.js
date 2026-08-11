@@ -66,6 +66,18 @@
             const start = makeBtn('▶ Start Capture', '#4caf50');
             start.onclick = startCapture;
             banner.appendChild(start);
+
+            // Single-column toggle — forces the reader's /renderer/render
+            // requests to maxNumberColumns=1 so exported pages are one column.
+            const label = document.createElement('label');
+            label.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;white-space:nowrap;';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.id = 'dk-single-col';
+            cb.checked = true;
+            label.appendChild(cb);
+            label.appendChild(document.createTextNode('Single-column'));
+            banner.appendChild(label);
         }
 
         const close = makeBtn('✕', 'rgba(255,255,255,0.15)');
@@ -83,11 +95,15 @@
             render('❌ Capture engine not found — reload the book page.');
             return;
         }
-        dklog('arming capture + reloading to capture from the current page');
+        const cb = document.getElementById('dk-single-col');
+        const singleColumn = cb ? cb.checked : false;
+        dklog('arming capture + reloading to capture from the current page (singleColumn=' + singleColumn + ')');
         render('🔄 Reloading to capture from this page…');
         try {
             sessionStorage.setItem('dekindled_armed', '1');
             sessionStorage.setItem('dekindled_autoscan', '1');
+            if (singleColumn) sessionStorage.setItem('dekindled_single_column', '1');
+            else sessionStorage.removeItem('dekindled_single_column');
         } catch (e) { dkerr('could not set flags:', e); }
         dk.blobData.clear();
         location.reload();
@@ -102,7 +118,7 @@
             if (dk.stats) Object.keys(dk.stats).forEach(k => { dk.stats[k] = 0; });
             dk.capturing = false;
         }
-        try { sessionStorage.removeItem('dekindled_armed'); sessionStorage.removeItem('dekindled_autoscan'); } catch (e) {}
+        try { sessionStorage.removeItem('dekindled_armed'); sessionStorage.removeItem('dekindled_autoscan'); sessionStorage.removeItem('dekindled_single_column'); } catch (e) {}
         dklog(`cache cleared (${cleared} pages discarded)`);
         render();
     }

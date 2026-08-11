@@ -2,7 +2,7 @@
 
 A Chrome extension that captures the page images Amazon's **Kindle Cloud Reader** renders and saves them to a single **ZIP of image files** — one file per page.
 
-> **This is a fork.** The [original DeKindled](https://github.com/dmilin1/inkwell/) captured pages and sent them to the **OpenAI vision API** to rebuild an **EPUB** (markdown → HTML → EPUB). **This fork removes OpenAI and EPUB entirely** and just downloads the raw captured page images. No API key, no network calls to third parties, no conversion — you get a folder of `page-0001.jpg`, `page-0002.jpg`, … inside a ZIP named after the book.
+> **This is a fork.** The [original DeKindled](https://github.com/dmilin1/dekindled) captured pages and sent them to the **OpenAI vision API** to rebuild an **EPUB** (markdown → HTML → EPUB). **This fork removes OpenAI and EPUB entirely** and just downloads the raw captured page images. No API key, no network calls to third parties, no conversion — you get a folder of `page-0001.jpg`, `page-0002.jpg`, … inside a ZIP named after the book.
 
 ## What changed vs. upstream
 
@@ -13,7 +13,7 @@ A Chrome extension that captures the page images Amazon's **Kindle Cloud Reader*
 | Network calls | Sends every page to OpenAI | **None** — everything stays local |
 | Capture start | Auto-scans on demand | **Nothing is captured until you click "Start Capture"** |
 | UI | Full-screen overlay | **Non-blocking banner** with Start / Stop / Download |
-| Amazon domains | `read.amazon.com` only | **All regional domains** (`.co.uk`, `.de`, `.co.jp`, `.fr`, `.ca`, …) |
+| Amazon domains | `read.amazon.com` only | **All regional `read.amazon.*` + localized subdomains** (`lire.amazon.fr`, `lesen.amazon.de`, …) |
 | Removed | — | `showdown.min.js`, OpenAI options page, EPUB builder |
 
 If you want AI transcription to EPUB, use the original. If you just want the page images, use this fork.
@@ -22,7 +22,7 @@ If you want AI transcription to EPUB, use the original. If you just want the pag
 
 Beyond the feature changes, this fork fixes two things that stopped the upstream extension from working properly for me:
 
-- **It only worked on `read.amazon.com`.** The upstream manifest matched only the US domain in its content-script `matches`, `host_permissions`, and `web_accessible_resources`. On any regional store — `read.amazon.co.uk`, `.de`, `.co.jp`, `.fr`, `.ca`, `.com.au`, and the rest — the interceptor was never injected, so nothing was captured and the extension silently appeared to do nothing. This fork registers **all 13 regional `read.amazon.*` domains**.
+- **It only worked on `read.amazon.com`.** The upstream manifest matched only the US domain in its content-script `matches`, `host_permissions`, and `web_accessible_resources`. On any regional store the interceptor was never injected, so nothing was captured and the extension silently appeared to do nothing. This fork registers **every regional `read.amazon.*` domain plus the localized "Kindle for Web" reader subdomains** Amazon now uses in some countries — `lire.amazon.fr`, `lesen.amazon.de`, `leggi.amazon.it`, `leer.amazon.es`, and others.
 
 - **Pages came out incomplete or out of order.** The reader generates a page's image **only the first time that page renders**, and won't regenerate it when you revisit an already-cached page. The upstream auto-scan started capturing from wherever you happened to be, so earlier pages were often missing and the ordering could drift. This fork keeps capture **disarmed until you click Start**, has you position on the first page, then **reloads to force a clean forward render from page one** — so you get every page, in order. (See ["Why it reloads"](#why-it-reloads-and-starts-from-where-you-are) below.)
 
@@ -39,8 +39,10 @@ Beyond the feature changes, this fork fixes two things that stopped the upstream
 2. **Turn to the first page you want** using the reader's own controls. Nothing is captured yet.
 3. Click the **DeKindled toolbar icon**. A small banner appears at the top of the page.
 4. Click **▶ Start Capture**. The page reloads and DeKindled begins turning pages forward on its own, capturing each one. A live count and a **■ Stop** button show in the banner.
+![](img/extension-screenshot-running.png)
 5. Let it run to the end of the book, or click **■ Stop** any time to keep only what's captured so far.
 6. Click the toolbar icon again and press **⬇ Download Images** to save the ZIP. Use **Clear** to discard the capture and start over.
+![](img/extension-screenshot-completed.png)
 
 ### Why it reloads and starts from where you are
 
@@ -69,7 +71,7 @@ The reader only generates a page's image **the first time that page renders**, a
 
 ## 🙏 Credits
 
-Fork of [DeKindled](https://github.com/dmilin1/inkwell/) by dmilin1. This fork strips the OpenAI/EPUB pipeline down to a local image export.
+Fork of [DeKindled](https://github.com/dmilin1/dekindled) by dmilin1. This fork strips the OpenAI/EPUB pipeline down to a local image export.
 
 ## 📄 License
 

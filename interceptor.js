@@ -43,7 +43,9 @@
         
         // Visual indicator for blob creation — only while capture is armed,
         // so nothing flashes on screen during normal reading.
-        if (type === 'Blob URL Created' && window.__dekindled && window.__dekindled.capturing) {
+        // Guard on document.body — during the armed reload the reader creates
+        // blobs at document_start when body is still null; appending then throws.
+        if (type === 'Blob URL Created' && document.body && window.__dekindled && window.__dekindled.capturing) {
             [...document.getElementsByClassName('dekindled-indicator')].forEach(indicator => indicator.remove());
             const indicator = document.createElement('div');
             indicator.className = 'dekindled-indicator';
@@ -62,6 +64,30 @@
             reader.onerror = reject;
             reader.readAsDataURL(blob);
         });
+    }
+
+    // Read the reader's footer readout: "Page 17 of 297 ● 6%".
+    // The ".text-div" holding it is light-DOM (slotted into ion-title's shadow
+    // root), so textContent reaches it without piercing any shadow boundary.
+    // NOTE: due to the reader pre-buffering a window of pages around the current
+    // position, the footer (what's *visible*) usually lags the page whose blob
+    // is being created — so this is best-effort metadata, not an exact label.
+    function readFooter() {
+        try {
+            const cands = [
+                ...document.querySelectorAll('ion-title[item-i-d="reader-footer-title"] .text-div, .text-div'),
+                ...document.querySelectorAll('ion-footer, [class*="footer"], [class*="location"]')
+            ];
+            for (const n of cands) {
+                const t = (n.textContent || '').replace(/\s+/g, ' ').trim();
+                const m = t.match(/Page\s+(\d+)\s+of\s+(\d+)/i);
+                if (m) {
+                    const pm = t.match(/(\d+)\s*%/);
+                    return { page: +m[1], total: +m[2], pct: pm ? +pm[1] : null, raw: t.slice(0, 60) };
+                }
+            }
+        } catch (e) { /* ignore */ }
+        return null;
     }
     
     // Check if URL.createObjectURL is already overridden
@@ -138,13 +164,11 @@
 
             logBlob('Blob URL Created', details);
         } catch (e) {
+            // Log only — no DOM fallback here. This runs on every createObjectURL
+            // call, including at document_start when document.body is null, so a
+            // DOM append would throw uncaught and spam the console (and could
+            // interrupt the reader's own load).
             dkerr('error in createObjectURL override:', e);
-            // Fallback visual alert
-            const alert = document.createElement('div');
-            alert.style.cssText = 'position:fixed;top:50px;left:10px;background:orange;color:black;padding:10px;z-index:999999;border-radius:4px;';
-            alert.textContent = 'DeKindled: Captured blob (error logging)';
-            document.body.appendChild(alert);
-            setTimeout(() => alert.remove(), 3000);
         }
         
         return url;
@@ -173,12 +197,30 @@
     if (window.webkitURL) {
         window.webkitURL = URL;
     }
-    
+
+    // Run a callback once <body> exists. The interceptor executes at
+    // document_start, so on some readers document.body is still null here and
+    // any appendChild would throw — deferring keeps the override installed
+    // early (to catch preloads) while touching the DOM only when it's safe.
+    function whenBodyReady(fn) {
+        if (document.body) { fn(); return; }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => fn(), { once: true });
+            return;
+        }
+        const obs = new MutationObserver(() => {
+            if (document.body) { obs.disconnect(); fn(); }
+        });
+        obs.observe(document.documentElement || document, { childList: true, subtree: true });
+    }
+
     // Create a visible indicator that script is running
-    const statusDiv = document.createElement('div');
-    statusDiv.style.cssText = 'position:fixed;bottom:10px;right:10px;background:#1976d2;color:white;padding:5px 10px;z-index:999999;font-size:10px;border-radius:4px;';
-    statusDiv.textContent = '📚 DeKindled Active';
-    document.body.appendChild(statusDiv);
+    whenBodyReady(() => {
+        const statusDiv = document.createElement('div');
+        statusDiv.style.cssText = 'position:fixed;bottom:10px;right:10px;background:#1976d2;color:white;padding:5px 10px;z-index:999999;font-size:10px;border-radius:4px;';
+        statusDiv.textContent = '📚 DeKindled Active';
+        document.body.appendChild(statusDiv);
+    });
 
     dklog('content extraction ready — capturing base64 blob data');
 
@@ -221,14 +263,75 @@
         try { sessionStorage.removeItem(key); } catch (e) {}
     }
 
+    // ---- Optional: force single-column page rendering during capture ------
+    // The newer "Kindle for Web" reader fetches each page from
+    //   /renderer/render?...&maxNumberColumns=N...
+    // where N is the column count. Rewriting that parameter to 1 makes every
+    // rendered page a single column — much easier to read as exported images.
+    // Because the capture flow reloads with dekindled_armed set BEFORE the
+    // reader issues any render request, even the initial preload comes back
+    // single-column. Only active when the user chose the single-column option,
+    // so it never affects normal reading.
+    function rewriteRenderUrl(url) {
+        try {
+            if (typeof url !== 'string') return url;
+            if (url.indexOf('/renderer/render') === -1) return url;
+            if (!/[?&]maxNumberColumns=\d+/.test(url)) return url;
+            const out = url.replace(/([?&]maxNumberColumns=)\d+/, (m, p1) => p1 + '1');
+            if (out !== url) dklog('single-column: rewrote render request maxNumberColumns→1');
+            return out;
+        } catch (e) { dkerr('rewriteRenderUrl failed:', e); return url; }
+    }
+    function installSingleColumnRewrite() {
+        if (window.__dekindled._singleColInstalled) return;
+        window.__dekindled._singleColInstalled = true;
+
+        // Bind to window so the native fetch is always invoked with the correct
+        // receiver. Webpack chunk loading often calls a destructured `fetch`
+        // (this !== window); forwarding that `this` throws "Illegal invocation"
+        // and surfaces as a ChunkLoadError that breaks the reader's own bundle.
+        const origFetch = window.fetch.bind(window);
+        if (typeof window.fetch === 'function') {
+            window.fetch = function(input, init) {
+                try {
+                    if (typeof input === 'string') {
+                        input = rewriteRenderUrl(input);
+                    } else if (input && typeof input.url === 'string') {
+                        const nu = rewriteRenderUrl(input.url);
+                        if (nu !== input.url) input = new Request(nu, input);
+                    }
+                } catch (e) { dkerr('fetch single-column rewrite error:', e); }
+                return origFetch(input, init);
+            };
+        }
+
+        const OrigOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+            try { if (typeof url === 'string') arguments[1] = rewriteRenderUrl(url); } catch (e) {}
+            return OrigOpen.apply(this, arguments);
+        };
+        dklog('single-column render rewrite installed');
+    }
+
+    // Install the rewrite as early as possible when the capture opted into it.
+    if (armedFromStorage('dekindled_single_column')) {
+        installSingleColumnRewrite();
+    }
+
     // Only the top frame has the reader UI / creates the page blobs.
     if (window.top === window) {
-        if (armedFromStorage('dekindled_armed')) {
+        const armed = armedFromStorage('dekindled_armed');
+        const autoscan = armedFromStorage('dekindled_autoscan');
+        const singleCol = armedFromStorage('dekindled_single_column');
+        dklog(`post-reload flags: armed=${armed} autoscan=${autoscan} singleColumn=${singleCol}`);
+        if (armed) {
             window.__dekindled.capturing = true;
             dklog('resumed ARMED capture after reload (catching the reader preload from page load)');
         }
-        if (armedFromStorage('dekindled_autoscan')) {
-            startCaptureDriver();
+        if (autoscan) {
+            // Defer until <body> exists — at document_start it may not, and the
+            // driver appends a status panel + queries the reader DOM.
+            whenBodyReady(startCaptureDriver);
         }
     }
 
@@ -239,16 +342,19 @@
                       '[class*="chevron-container-right"]'];
         const firstEl = (sels) => { for (const s of sels) { const el = document.querySelector(s); if (el) return el; } return null; };
         const fireKey = (t, key, kc) => {
+            // Wrap each dispatch: the reader's own keydown handler runs
+            // synchronously here, and if the reader is in a bad state its
+            // handler can throw — we don't want that to abort our turn/tick.
             const o = { key, code: key, keyCode: kc, which: kc, bubbles: true, cancelable: true };
-            t.dispatchEvent(new KeyboardEvent('keydown', o));
-            t.dispatchEvent(new KeyboardEvent('keyup', o));
+            try { t.dispatchEvent(new KeyboardEvent('keydown', o)); } catch (e) {}
+            try { t.dispatchEvent(new KeyboardEvent('keyup', o)); } catch (e) {}
         };
         const turn = () => {
             const el = firstEl(NEXT);
             [el, document, document.body].filter(Boolean).forEach(t => fireKey(t, 'ArrowRight', 39));
             if (el) { try { el.click(); } catch (e) {} }
         };
-        const pageNum = () => { let p = null; document.querySelectorAll('[class*="footer"],ion-footer,[class*="location"]').forEach(el => { const m = (el.textContent || '').match(/Page\s+(\S+)\s+of\s+(\d+)/i); if (m) p = m[1] + '/' + m[2]; }); return p; };
+        const pageNum = () => { const f = readFooter(); return f ? (f.page + '/' + f.total) : null; };
         const scr = () => { const b = document.querySelector('#kr-scrubber-bar'); return b ? b.value : null; };
         const scrFrac = () => { const b = document.querySelector('#kr-scrubber-bar'); if (!b || b.max == null) return null; const v = Number(b.value), m = Number(b.max); return m ? v / m : null; };
         const isUnavailable = (el) => {
@@ -257,7 +363,22 @@
             try { const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden' || cs.pointerEvents === 'none') return true; } catch (e) {}
             return false;
         };
-        const atEnd = () => { const f = scrFrac(); if (f != null && f >= 0.995) return true; return isUnavailable(firstEl(NEXT)); };
+        // We're at the end only when there's POSITIVE evidence: the scrubber is
+        // ~100%, or a next-page control exists but is now disabled/hidden. A
+        // *missing* control is NOT evidence of the end — the newer "Kindle for
+        // Web" reader has no .kr-chevron at all, so treating absence as "end"
+        // used to make the scan quit on tick 1. When there's no signal we let
+        // the stable-count fallback (STABLE_STOP) decide instead.
+        const atEnd = () => {
+            const f = scrFrac();
+            if (f != null && f >= 0.995) return true;
+            // Footer says we're on the last page (works on the new reader).
+            const ft = readFooter();
+            if (ft && ft.total && ft.page >= ft.total) return true;
+            const nextEl = firstEl(NEXT);
+            if (nextEl && isUnavailable(nextEl)) return true;
+            return false;
+        };
 
         const TICK = 800;
         const STABLE_STOP = 14;   // ~11s of no progress => treat as end of book (fallback)
@@ -280,6 +401,17 @@
         let iv = null;
         stopBtn.onclick = () => { if (iv) { clearInterval(iv); iv = null; } finish('stopped'); };
 
+        // One-time probe: log which page-turn controls this reader exposes, so
+        // we can adapt navigation to the newer "Kindle for Web" DOM if needed.
+        setTimeout(() => {
+            try {
+                const found = NEXT.map(s => `${s}:${document.querySelectorAll(s).length}`).join('  ');
+                dklog('nav-probe — NEXT selector hit counts:', found,
+                      '| scrubber:', !!document.querySelector('#kr-scrubber-bar'),
+                      '| stored so far:', window.__dekindled.blobData.size);
+            } catch (e) { dkerr('nav-probe failed:', e); }
+        }, START_DELAY - 200);
+
         setTimeout(() => {
             let tick = 0, stable = 0, lastSig = null;
             iv = setInterval(() => {
@@ -287,15 +419,18 @@
                     tick++;
                     if (tick > MAX_TICKS) { clearInterval(iv); iv = null; finish('safety cap'); return; }
 
+                    // Log BEFORE turn() so a tick is always visible even if the
+                    // reader's key handler misbehaves during navigation.
+                    const n = window.__dekindled.blobData.size;
+                    const ft = readFooter();
+                    if (tick % 3 === 0) txt.textContent = `📚 DeKindled: capturing… ${n} images${ft ? ` (footer p.${ft.page}/${ft.total})` : ''}`;
+                    dklog(`driver tick ${tick} footer=${ft ? ft.page + '/' + ft.total : '?'} storedImages=${n} stable=${stable}`);
+
                     turn();
 
                     const sig = (pageNum() || '?') + '|' + scr() + '|' + window.__dekindled.blobData.size;
                     if (sig === lastSig) stable++; else stable = 0;
                     lastSig = sig;
-
-                    const n = window.__dekindled.blobData.size;
-                    if (tick % 3 === 0) txt.textContent = `📚 DeKindled: capturing… ${n} pages`;
-                    if (tick % 5 === 0) dklog(`driver tick ${tick} sig=${sig} stable=${stable} stored=${n}`);
 
                     if (atEnd() || stable >= STABLE_STOP) { clearInterval(iv); iv = null; finish(atEnd() ? 'reached end of book' : 'no more new pages'); }
                 } catch (e) {
